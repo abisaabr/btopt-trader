@@ -1,0 +1,7 @@
+# Optionable tickers to start; replace with a generated top-500 later.
+tickers:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - META
