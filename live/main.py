@@ -1,7 +1,7 @@
-import os
+import os, time
 from typing import List
-import time
 import yfinance as yf
+from fastapi import FastAPI
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
@@ -16,10 +16,6 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
 
 app = FastAPI()
-
-@app.get("/paper")
-def paper_smoke():
-    return {"ok": True, "mode": "dry-run", "note": "replace me with real paper trader"}
 
 def get_env_list(key: str, default: str = "") -> List[str]:
     raw = os.getenv(key, default)
@@ -37,16 +33,14 @@ def fetch_last_price(sym: str) -> float | None:
 @app.get("/paper")
 def paper():
     """
-    Dry-run paper trading pass.
-    - Reads universe from UNIVERSE env var
-    - Pulls last price via yfinance (no paid data needed)
-    - If PLACE_ORDERS=true, places a tiny market order in Alpaca paper (1 share) for the first symbol only
-      (kept intentionally small/safe). Otherwise just returns a summary.
+    Dry-run paper pass:
+    - Reads UNIVERSE
+    - Fetches last prices with yfinance
+    - If PLACE_ORDERS=true, places 1-share market order for the first symbol (canary)
     """
     universe = get_env_list("UNIVERSE", "SPY,QQQ,AAPL,MSFT")
     place_orders = os.getenv("PLACE_ORDERS", "false").lower() == "true"
 
-    # Pull prices
     results = []
     t0 = time.time()
     for sym in universe:
@@ -56,23 +50,17 @@ def paper():
     placed = []
     msg = "dry-run"
     if place_orders:
-        # Alpaca auth (paper keys are provided via secrets)
         key = os.getenv("ALPACA_KEY")
         secret = os.getenv("ALPACA_SECRET")
         if not key or not secret:
             return {"ok": False, "error": "Missing ALPACA_KEY/ALPACA_SECRET env"}
 
         client = TradingClient(api_key=key, secret_key=secret, paper=True)
-
-        # Sanity check account status
         try:
-            acct = client.get_account()
-            # OPTIONAL: ensure we're in paper mode / active
-            _ = acct.status
+            _ = client.get_account()  # sanity check
         except Exception as e:
             return {"ok": False, "error": f"Alpaca auth/account failed: {e!r}"}
 
-        # Safety: place **one** tiny test order on the first symbol only
         sym0 = universe[0]
         try:
             order = client.submit_order(
