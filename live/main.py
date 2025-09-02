@@ -24,9 +24,8 @@ def readyz():
 
 @app.get("/healthz")
 def healthz():
-    # light checks only; don't call external APIs here
-    env_ok = all(k in os.environ for k in ["UNIVERSE"])
-    return {"ok": env_ok, "time": time.time()}
+    return {"ok": "UNIVERSE" in os.environ, "time": time.time()}
+
 
 
 # quiet the noisy 404s in logs
