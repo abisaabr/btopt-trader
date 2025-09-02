@@ -17,11 +17,11 @@ from alpaca.trading.requests import MarketOrderRequest
 
 app = FastAPI()
 
-def get_env_list(key: str, default: str = "") -> List[str]:
+def _env_list(key: str, default: str = "") -> List[str]:
     raw = os.getenv(key, default)
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
-def fetch_last_price(sym: str) -> float | None:
+def _last_price(sym: str) -> float | None:
     try:
         df = yf.download(sym, period="5d", interval=os.getenv("INTERVAL", "5m"), progress=False)
         if df is None or df.empty:
@@ -33,22 +33,19 @@ def fetch_last_price(sym: str) -> float | None:
 @app.get("/paper")
 def paper():
     """
-    Dry-run paper pass:
-    - Reads UNIVERSE
-    - Fetches last prices with yfinance
-    - If PLACE_ORDERS=true, places 1-share market order for the first symbol (canary)
+    Dry-run paper trading pass.
+    PLACE_ORDERS=false -> just return prices (no orders).
+    PLACE_ORDERS=true  -> place 1-test-share BUY on the first symbol as a canary.
     """
-    universe = get_env_list("UNIVERSE", "SPY,QQQ,AAPL,MSFT")
+    universe = _env_list("UNIVERSE", "SPY,QQQ,AAPL,MSFT")
     place_orders = os.getenv("PLACE_ORDERS", "false").lower() == "true"
 
-    results = []
     t0 = time.time()
-    for sym in universe:
-        px = fetch_last_price(sym)
-        results.append({"symbol": sym, "last": px})
+    prices = [{"symbol": s, "last": _last_price(s)} for s in universe]
 
     placed = []
     msg = "dry-run"
+
     if place_orders:
         key = os.getenv("ALPACA_KEY")
         secret = os.getenv("ALPACA_SECRET")
@@ -56,8 +53,10 @@ def paper():
             return {"ok": False, "error": "Missing ALPACA_KEY/ALPACA_SECRET env"}
 
         client = TradingClient(api_key=key, secret_key=secret, paper=True)
+
+        # sanity check account
         try:
-            _ = client.get_account()  # sanity check
+            _ = client.get_account().status
         except Exception as e:
             return {"ok": False, "error": f"Alpaca auth/account failed: {e!r}"}
 
@@ -82,7 +81,7 @@ def paper():
         "mode": "live-service",
         "place_orders": place_orders,
         "universe": universe,
-        "prices": results,
+        "prices": prices,
         "placed": placed,
         "elapsed_s": round(time.time() - t0, 3),
         "msg": msg,
