@@ -21,27 +21,27 @@ def _env_list(key: str, default: str = "") -> List[str]:
     raw = os.getenv(key, default)
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
-def _last_price(sym: str) -> float | None:
+def _last_price(sym: str, interval: str) -> Optional[float]:
     try:
-        df = yf.download(sym, period="5d", interval=os.getenv("INTERVAL", "5m"), progress=False)
+        df = yf.download(sym, period="5d", interval=interval, progress=False)
         if df is None or df.empty:
             return None
         return float(df["Close"].iloc[-1])
     except Exception:
         return None
 
-@app.get("/paper")
+@app.get("/paper", summary="Paper trade dry-run / smoke test")
 def paper():
     """
-    Dry-run paper trading pass.
-    PLACE_ORDERS=false -> just return prices (no orders).
-    PLACE_ORDERS=true  -> place 1-test-share BUY on the first symbol as a canary.
+    PLACE_ORDERS=false -> dry-run (report last prices only)
+    PLACE_ORDERS=true  -> place 1-share BUY on the first symbol (paper account)
     """
     universe = _env_list("UNIVERSE", "SPY,QQQ,AAPL,MSFT")
+    interval = os.getenv("INTERVAL", "5m")
     place_orders = os.getenv("PLACE_ORDERS", "false").lower() == "true"
 
     t0 = time.time()
-    prices = [{"symbol": s, "last": _last_price(s)} for s in universe]
+    prices = [{"symbol": s, "last": _last_price(s, interval)} for s in universe]
 
     placed = []
     msg = "dry-run"
@@ -51,10 +51,7 @@ def paper():
         secret = os.getenv("ALPACA_SECRET")
         if not key or not secret:
             return {"ok": False, "error": "Missing ALPACA_KEY/ALPACA_SECRET env"}
-
         client = TradingClient(api_key=key, secret_key=secret, paper=True)
-
-        # sanity check account
         try:
             _ = client.get_account().status
         except Exception as e:
