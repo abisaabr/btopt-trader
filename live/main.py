@@ -1,7 +1,11 @@
 from fastapi import FastAPI
-import asyncio
+import asyncio, os, sys
+
+print("Starting FastAPI app… PYTHONPATH=", os.getenv("PYTHONPATH"), " sys.path[0]=", sys.path[0])
 
 app = FastAPI()
+# (rest of your file unchanged)
+
 
 @app.get("/readyz")
 def readyz():
