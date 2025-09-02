@@ -17,6 +17,10 @@ from alpaca.trading.requests import MarketOrderRequest
 
 app = FastAPI()
 
+@app.get("/paper")
+def paper_smoke():
+    return {"ok": True, "mode": "dry-run", "note": "replace me with real paper trader"}
+
 def get_env_list(key: str, default: str = "") -> List[str]:
     raw = os.getenv(key, default)
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
