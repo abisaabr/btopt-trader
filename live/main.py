@@ -1,10 +1,9 @@
-import os, time
-from typing import List
+import os, time, math
+from typing import List, Optional, Dict, Any
+
+import pandas as pd
 import yfinance as yf
 from fastapi import FastAPI
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
 # Indicators
 from ta.momentum import RSIIndicator
@@ -17,72 +16,11 @@ from alpaca.trading.requests import MarketOrderRequest
 
 app = FastAPI()
 
+# ---------- small helpers ----------
+
 def _env_list(key: str, default: str = "") -> List[str]:
     raw = os.getenv(key, default)
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
-
-def _last_price(sym: str, interval: str) -> Optional[float]:
-    try:
-        df = yf.download(sym, period="5d", interval=interval, progress=False)
-        if df is None or df.empty:
-            return None
-        return float(df["Close"].iloc[-1])
-    except Exception:
-        return None
-
-@app.get("/paper", summary="Paper trade dry-run / smoke test")
-def paper():
-    """
-    PLACE_ORDERS=false -> dry-run (report last prices only)
-    PLACE_ORDERS=true  -> place 1-share BUY on the first symbol (paper account)
-    """
-    universe = _env_list("UNIVERSE", "SPY,QQQ,AAPL,MSFT")
-    interval = os.getenv("INTERVAL", "5m")
-    place_orders = os.getenv("PLACE_ORDERS", "false").lower() == "true"
-
-    t0 = time.time()
-    prices = [{"symbol": s, "last": _last_price(s, interval)} for s in universe]
-
-    placed = []
-    msg = "dry-run"
-
-    if place_orders:
-        key = os.getenv("ALPACA_KEY")
-        secret = os.getenv("ALPACA_SECRET")
-        if not key or not secret:
-            return {"ok": False, "error": "Missing ALPACA_KEY/ALPACA_SECRET env"}
-        client = TradingClient(api_key=key, secret_key=secret, paper=True)
-        try:
-            _ = client.get_account().status
-        except Exception as e:
-            return {"ok": False, "error": f"Alpaca auth/account failed: {e!r}"}
-
-        sym0 = universe[0]
-        try:
-            order = client.submit_order(
-                order_data=MarketOrderRequest(
-                    symbol=sym0,
-                    qty=1,
-                    side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY,
-                    order_class=OrderClass.SIMPLE,
-                )
-            )
-            placed.append({"symbol": sym0, "id": getattr(order, "id", None)})
-            msg = "1 test order placed"
-        except Exception as e:
-            return {"ok": False, "error": f"submit_order failed: {e!r}"}
-
-    return {
-        "ok": True,
-        "mode": "live-service",
-        "place_orders": place_orders,
-        "universe": universe,
-        "prices": prices,
-        "placed": placed,
-        "elapsed_s": round(time.time() - t0, 3),
-        "msg": msg,
-    }
 
 def env_float(name: str, default_val: float) -> float:
     try:
@@ -91,7 +29,9 @@ def env_float(name: str, default_val: float) -> float:
         return default_val
 
 def get_universe() -> List[str]:
-    return env_list("UNIVERSE", "SPY,QQQ")
+    return _env_list("UNIVERSE", "SPY,QQQ")
+
+# ---------- health / smoke ----------
 
 @app.get("/readyz")
 def readyz():
@@ -100,20 +40,19 @@ def readyz():
 @app.get("/healthz")
 def healthz():
     must_have = ["UNIVERSE"]
-    env_ok = all(k in os.environ for k in must_have)
-    return {"ok": env_ok, "time": time.time(), "missing": [k for k in must_have if k not in os.environ]}
+    missing = [k for k in must_have if k not in os.environ]
+    return {"ok": len(missing) == 0, "time": time.time(), "missing": missing}
 
 @app.get("/run")
 def run_once():
     return {"ok": True, "universe": get_universe(), "ts": time.time()}
 
-# ---------- strategy helpers ----------
+# ---------- strategy bits ----------
 
 def get_ohlcv(symbol: str, interval: str, lookback_days: int) -> pd.DataFrame:
     # yfinance period must align with interval; use generous buffer
     period = f"{max(lookback_days, 5)}d"
     df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
-    # normalize column names
     if not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame()
     df = df.rename(columns={c: c.capitalize() for c in df.columns})
@@ -137,7 +76,7 @@ def generate_signal(df: pd.DataFrame) -> str:
     """
     if len(df) < 3:
         return "HOLD"
-    rsi_prev2, rsi_prev1, rsi_now = df["RSI"].iloc[-3], df["RSI"].iloc[-2], df["RSI"].iloc[-1]
+    rsi_prev1, rsi_now = df["RSI"].iloc[-2], df["RSI"].iloc[-1]
     price_now = df["Close"].iloc[-1]
     ema_now = df["EMA"].iloc[-1]
 
@@ -150,7 +89,7 @@ def generate_signal(df: pd.DataFrame) -> str:
         return "SELL"
     return "HOLD"
 
-def alpaca_client_or_none() -> TradingClient | None:
+def alpaca_client_or_none() -> Optional[TradingClient]:
     key = os.getenv("ALPACA_KEY")
     sec = os.getenv("ALPACA_SECRET")
     if not key or not sec:
@@ -174,13 +113,24 @@ def maybe_place_order(client: TradingClient, symbol: str, side: str, qty: int) -
         time_in_force=TimeInForce.DAY,
     )
     o = client.submit_order(order_data=req)
-    return {"id": o.id, "symbol": o.symbol, "side": o.side.value, "qty": o.qty, "status": str(o.status)}
+    return {
+        "id": getattr(o, "id", None),
+        "symbol": getattr(o, "symbol", symbol),
+        "side": side,
+        "qty": qty,
+        "status": str(getattr(o, "status", "submitted")),
+    }
 
-@app.get("/paper")
+# ---------- /paper endpoint ----------
+
+@app.get("/paper", summary="Paper trade dry-run / smoke test")
 def paper():
     """
     Pulls data with yfinance, computes RSI/EMA, emits signals,
     and (if enabled) places paper market orders on Alpaca.
+
+    PLACE_ORDERS=false -> dry-run (no orders; just signals/prices)
+    PLACE_ORDERS=true  -> places orders when signal is BUY/SELL
     """
     uni = get_universe()
     interval = os.getenv("INTERVAL", "5m")
@@ -193,7 +143,14 @@ def paper():
     paper_equity = env_float("PAPER_EQUITY", 100000.0)
     risk_pct = env_float("RISK_PCT", 0.005)  # 0.5% default
 
-    results: Dict[str, Any] = {"ok": True, "interval": interval, "lookback_days": lookback, "signals": {}}
+    results: Dict[str, Any] = {
+        "ok": True,
+        "mode": "live-service",
+        "place_orders": place_orders,
+        "interval": interval,
+        "lookback_days": lookback,
+        "signals": {},
+    }
 
     client = alpaca_client_or_none() if place_orders else None
     if place_orders and client is None:
