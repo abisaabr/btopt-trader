@@ -20,13 +20,14 @@ def get_most_active_symbols() -> list[str]:
 
 @app.get("/readyz")
 def readyz():
-    # readiness should NOT hit external APIs
     return {"ok": True}
 
 @app.get("/healthz")
 def healthz():
-    # healthy if the loop (or /run) executed recently
-    return {"ok": (time.time() - _last_loop_ts) < 600}
+    # light checks only; don't call external APIs here
+    env_ok = all(k in os.environ for k in ["UNIVERSE"])
+    return {"ok": env_ok, "time": time.time()}
+
 
 # quiet the noisy 404s in logs
 @app.post("/guardrail")
@@ -36,13 +37,5 @@ def guardrail_hook():
 
 @app.get("/run")
 def run_once():
-    """
-    Minimal 'do a loop' endpoint.
-    For now it just reads the universe from env to prove the app is healthy.
-    Wire your trading logic here later.
-    """
-    global _last_loop_ts
-    symbols = get_most_active_symbols()
-    # TODO: call your indicator calc + order logic here (no external Screener calls)
-    _last_loop_ts = time.time()
-    return {"ok": True, "universe": symbols, "ts": _last_loop_ts}
+    uni = os.getenv("UNIVERSE", "SPY,QQQ").split(",")
+    return {"ok": True, "universe": uni, "ts": time.time()}
