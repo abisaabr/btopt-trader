@@ -7,3 +7,5 @@ pydantic<3
 yfinance
 ta
 pandas
+fastapi[standard]
+uvicorn
