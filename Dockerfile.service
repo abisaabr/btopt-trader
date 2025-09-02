@@ -1,12 +1,18 @@
+cat > Dockerfile.service <<'DOCKER'
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8080 \
+    PYTHONPATH=/app
+
 WORKDIR /app
-ENV PYTHONPATH=/app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-# IMPORTANT: run the FastAPI app in live/main.py
-CMD ["uvicorn", "live.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# IMPORTANT: point uvicorn at the 'live' folder explicitly
+CMD ["uvicorn","main:app","--app-dir","live","--host","0.0.0.0","--port","8080"]
+DOCKER
